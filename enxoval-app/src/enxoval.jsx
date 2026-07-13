@@ -56,18 +56,11 @@ const INITIAL_ROOMS = [
       "Suporte para copo", "Manta para sofá", "Decoração", "Quadro",
     ],
   },
-  {
-    id: "outros",
-    label: "Outros",
-    items: [
-      "Ferramentas", "Kit costura", "Aparelho de pressão", "Nebulizador",
-      "Termômetro", "Extensão", "Furadeira", "Benjamin", "Parafusadeira",
-      "Chaves de fenda",
-    ],
-  },
 ];
 
 const STORAGE_KEY = "enxoval-dinamico-v2";
+const BACKUP_VERSION = 1;
+const MAX_BACKUP_SIZE = 5 * 1024 * 1024;
 
 const slugify = (value) =>
   value
@@ -148,6 +141,7 @@ export default function EnxovalApp() {
   const [loaded, setLoaded] = useState(false);
   const [savedPulse, setSavedPulse] = useState(false);
   const saveTimer = useRef(null);
+  const backupInputRef = useRef(null);
 
   useEffect(() => {
     (async () => {
@@ -288,6 +282,130 @@ export default function EnxovalApp() {
     setActiveRoomId(initial[0].id);
   };
 
+  const createBackupFile = () => {
+    const createdAt = new Date();
+    const backup = {
+      app: "meu-enxoval",
+      version: BACKUP_VERSION,
+      createdAt: createdAt.toISOString(),
+      data: { rooms, activeRoomId },
+    };
+    const date = createdAt.toISOString().slice(0, 10);
+    return new File(
+      [JSON.stringify(backup, null, 2)],
+      `meu-enxoval-backup-${date}.json`,
+      { type: "application/json" }
+    );
+  };
+
+  const downloadFile = (file) => {
+    const url = URL.createObjectURL(file);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = file.name;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadBackup = () => downloadFile(createBackupFile());
+
+  const shareBackup = async () => {
+    const file = createBackupFile();
+    const shareData = {
+      title: "Backup do Meu Enxoval",
+      text: "Guarde este arquivo para restaurar sua lista de enxoval quando precisar.",
+      files: [file],
+    };
+
+    if (navigator.share && navigator.canShare?.(shareData)) {
+      try {
+        await navigator.share(shareData);
+      } catch (error) {
+        if (error.name !== "AbortError") {
+          console.error("Não foi possível compartilhar o backup.", error);
+        }
+      }
+      return;
+    }
+
+    downloadFile(file);
+    window.alert("O arquivo foi baixado. Anexe-o ao seu e-mail para guardar uma cópia.");
+  };
+
+  const isValidBackup = (backup) => {
+    if (
+      backup?.app !== "meu-enxoval" ||
+      backup.version !== BACKUP_VERSION ||
+      !Array.isArray(backup.data?.rooms) ||
+      backup.data.rooms.length === 0
+    ) {
+      return false;
+    }
+
+    const roomsAreValid = backup.data.rooms.every(
+      (room) =>
+        typeof room.id === "string" &&
+        typeof room.label === "string" &&
+        typeof room.glyph === "string" &&
+        Array.isArray(room.items) &&
+        room.items.every(
+          (item) =>
+            typeof item.id === "string" &&
+            typeof item.name === "string" &&
+            typeof item.bought === "boolean" &&
+            typeof item.price === "string"
+        )
+    );
+
+    return (
+      roomsAreValid &&
+      typeof backup.data.activeRoomId === "string" &&
+      backup.data.rooms.some((room) => room.id === backup.data.activeRoomId)
+    );
+  };
+
+  const importBackup = async (event) => {
+    const [file] = event.target.files;
+    event.target.value = "";
+    if (!file) return;
+
+    try {
+      if (file.size > MAX_BACKUP_SIZE) {
+        throw new Error("O arquivo excede o limite de 5 MB.");
+      }
+
+      const backup = JSON.parse(await file.text());
+      if (!isValidBackup(backup)) {
+        throw new Error("Este arquivo não é um backup válido do Meu Enxoval.");
+      }
+
+      const backupDate = new Date(backup.createdAt);
+      const formattedDate = Number.isNaN(backupDate.getTime())
+        ? "data desconhecida"
+        : backupDate.toLocaleString("pt-BR");
+      const confirmed = window.confirm(
+        `Restaurar o backup de ${formattedDate}? A lista atual será substituída.`
+      );
+      if (!confirmed) return;
+
+      setRooms(backup.data.rooms);
+      setActiveRoomId(backup.data.activeRoomId);
+      await storageSet(
+        STORAGE_KEY,
+        JSON.stringify({
+          rooms: backup.data.rooms,
+          activeRoomId: backup.data.activeRoomId,
+        })
+      );
+      window.alert("Backup restaurado com sucesso.");
+    } catch (error) {
+      console.error("Falha ao restaurar o backup.", error);
+      window.alert(error.message || "Não foi possível restaurar este backup.");
+    }
+  };
+
   if (!activeRoom) return null;
 
   const stats = roomStats(activeRoom);
@@ -298,13 +416,13 @@ export default function EnxovalApp() {
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
         :root{--navy-950:#071620;--navy-900:#0a1f2c;--card:#122636;--card-hover:#163046;--line:rgba(198,224,222,.10);--teal-500:#2fb6a3;--teal-400:#4fd6c0;--teal-300:#8fe9d8;--brass:#d3a75c;--ink:#eaf3f1;--ink-dim:#93aeae;--ink-faint:#5f7c7c;}
-        *{box-sizing:border-box}.app{min-height:100vh;background:radial-gradient(ellipse 900px 500px at 15% -10%,rgba(47,182,163,.12),transparent 60%),radial-gradient(ellipse 700px 500px at 100% 0%,rgba(211,167,92,.06),transparent 55%),var(--navy-950);color:var(--ink);font-family:Inter,system-ui,sans-serif;display:flex;flex-direction:column}.header{padding:36px 28px 20px;position:relative;border-bottom:1px solid var(--line)}.header__line{position:absolute;top:22px;left:28px;right:28px;height:1px;background:linear-gradient(90deg,var(--teal-500),transparent 70%);opacity:.35}.eyebrow{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--teal-300);margin:0 0 6px}h1{font-family:Fraunces,serif;font-weight:500;font-size:clamp(28px,5vw,42px);margin:0}h1 em{font-style:italic;color:var(--teal-300)}.header__meta{display:flex;gap:28px;margin-top:18px;flex-wrap:wrap}.meta-stat{display:flex;flex-direction:column;gap:2px}.num{font-family:Fraunces,serif;font-size:22px}.num.brass{color:var(--brass)}.lbl{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--ink-faint)}.save-indicator{position:absolute;top:36px;right:28px;font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--teal-400);opacity:0;transition:opacity .3s;display:flex;align-items:center;gap:6px}.save-indicator.show{opacity:.85}.dot{width:5px;height:5px;border-radius:50%;background:var(--teal-400)}.layout{display:flex;flex:1;min-height:0}.rooms-rail{width:230px;flex-shrink:0;padding:24px 12px;border-right:1px solid var(--line)}.room-tab{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:none;border:none;color:var(--ink-dim);font:500 14px Inter;padding:11px 10px 11px 16px;cursor:pointer;border-radius:8px;transition:.2s}.room-tab:hover{color:var(--ink);background:rgba(255,255,255,.03)}.room-tab.active{color:var(--teal-300);background:rgba(47,182,163,.08)}.glyph{font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--teal-400)}.room-tab__progress{margin-left:auto;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--ink-faint)}.add-room{margin-top:18px;padding-top:18px;border-top:1px solid var(--line)}.main{flex:1;padding:28px 32px 60px;overflow-y:auto}.room-head{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:18px;flex-wrap:wrap}.room-head h2{font-family:Fraunces,serif;font-weight:500;font-size:26px;margin:0}.progress-wrap{display:flex;align-items:center;gap:12px;min-width:220px}.progress-bar{flex:1;height:5px;border-radius:4px;background:rgba(255,255,255,.06);overflow:hidden}.progress-fill{height:100%;background:linear-gradient(90deg,var(--teal-500),var(--teal-300));transition:width .4s}.progress-pct{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--teal-300);width:34px;text-align:right}.room-spent{font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--brass)}.toolbar{display:flex;gap:10px;margin-bottom:18px;flex-wrap:wrap}.form-inline{display:flex;gap:8px;flex:1;min-width:280px}.text-input{width:100%;background:var(--card);border:1px solid var(--line);border-radius:8px;color:var(--ink);padding:10px 12px;outline:none}.text-input:focus{border-color:rgba(79,214,192,.5)}.btn{border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);padding:9px 13px;font-weight:600;cursor:pointer}.btn:hover{background:var(--card-hover)}.btn-primary{background:var(--teal-500);border-color:var(--teal-500);color:var(--navy-950)}.btn-danger{color:#ffb4b4}.items-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px}.item-row{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:11px 14px;transition:.2s}.item-row:hover{background:var(--card-hover)}.item-row.done{border-color:rgba(47,182,163,.28);background:rgba(47,182,163,.05)}.item-name{flex:1;font-size:14px;line-height:1.35}.item-row.done .item-name{color:var(--ink-faint);text-decoration:line-through;text-decoration-color:var(--teal-500)}.price-field{display:flex;align-items:center;gap:4px;background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:6px;padding:5px 8px}.price-field span{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--ink-faint)}.price-field input{width:64px;background:none;border:none;outline:none;color:var(--brass);font-family:'JetBrains Mono',monospace;font-size:12.5px}.icon-btn{border:none;background:none;color:var(--ink-faint);cursor:pointer;font-size:18px;line-height:1;padding:2px}.icon-btn:hover{color:#ffb4b4}.peg{appearance:none;border:none;background:none;cursor:pointer;width:26px;height:26px;padding:0;flex-shrink:0}.peg__body{width:22px;height:22px;border-radius:6px;border:1.5px solid var(--ink-faint);display:flex;align-items:center;justify-content:center;transition:.2s;background:rgba(255,255,255,.02)}.peg__check{width:12px;height:8px;fill:none;stroke:var(--navy-950);stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round;opacity:0;transform:scale(.6);transition:.18s}.peg--on .peg__body{background:var(--teal-400);border-color:var(--teal-400)}.peg--on .peg__check{opacity:1;transform:scale(1)}.empty{padding:36px;border:1px dashed var(--line);border-radius:12px;text-align:center;color:var(--ink-faint)}.footer-note{margin-top:34px;padding-top:18px;border-top:1px solid var(--line);font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ink-faint)}@media(max-width:760px){.layout{flex-direction:column}.rooms-rail{width:100%;border-right:none;border-bottom:1px solid var(--line);display:flex;overflow-x:auto;padding:14px 16px;gap:4px}.room-tab{white-space:nowrap;min-width:max-content}.add-room{min-width:280px;margin:0 0 0 12px;padding:0 0 0 12px;border-top:none;border-left:1px solid var(--line)}.main{padding:22px 18px 50px}.items-grid{grid-template-columns:1fr}}
+        *{box-sizing:border-box}.app{min-height:100vh;background:radial-gradient(ellipse 900px 500px at 15% -10%,rgba(47,182,163,.12),transparent 60%),radial-gradient(ellipse 700px 500px at 100% 0%,rgba(211,167,92,.06),transparent 55%),var(--navy-950);color:var(--ink);font-family:Inter,system-ui,sans-serif;display:flex;flex-direction:column}.header{padding:36px 28px 20px;position:relative;border-bottom:1px solid var(--line)}.header__line{position:absolute;top:22px;left:28px;right:28px;height:1px;background:linear-gradient(90deg,var(--teal-500),transparent 70%);opacity:.35}.eyebrow{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--teal-300);margin:0 0 6px}h1{font-family:Fraunces,serif;font-weight:500;font-size:clamp(28px,5vw,42px);margin:0}h1 em{font-style:italic;color:var(--teal-300)}.header__meta{display:flex;gap:28px;margin-top:18px;flex-wrap:wrap}.meta-stat{display:flex;flex-direction:column;gap:2px}.num{font-family:Fraunces,serif;font-size:22px}.num.brass{color:var(--brass)}.lbl{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--ink-faint)}.save-indicator{position:absolute;top:36px;right:28px;font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--teal-400);opacity:0;transition:opacity .3s;display:flex;align-items:center;gap:6px}.save-indicator.show{opacity:.85}.dot{width:5px;height:5px;border-radius:50%;background:var(--teal-400)}.layout{display:flex;flex:1;min-height:0}.rooms-rail{width:230px;flex-shrink:0;padding:24px 12px;border-right:1px solid var(--line)}.room-tab{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:none;border:none;color:var(--ink-dim);font:500 14px Inter;padding:11px 10px 11px 16px;cursor:pointer;border-radius:8px;transition:.2s}.room-tab:hover{color:var(--ink);background:rgba(255,255,255,.03)}.room-tab.active{color:var(--teal-300);background:rgba(47,182,163,.08)}.glyph{font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--teal-400)}.room-tab__progress{margin-left:auto;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--ink-faint)}.add-room{margin-top:18px;padding-top:18px;border-top:1px solid var(--line)}.main{flex:1;padding:28px 32px 60px;overflow-y:auto}.room-head{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:18px;flex-wrap:wrap}.room-head h2{font-family:Fraunces,serif;font-weight:500;font-size:26px;margin:0}.progress-wrap{display:flex;align-items:center;gap:12px;min-width:220px}.progress-bar{flex:1;height:5px;border-radius:4px;background:rgba(255,255,255,.06);overflow:hidden}.progress-fill{height:100%;background:linear-gradient(90deg,var(--teal-500),var(--teal-300));transition:width .4s}.progress-pct{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--teal-300);width:34px;text-align:right}.room-spent{font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--brass)}.toolbar{display:flex;gap:10px;margin-bottom:18px;flex-wrap:wrap}.form-inline{display:flex;gap:8px;flex:1;min-width:280px}.text-input{width:100%;background:var(--card);border:1px solid var(--line);border-radius:8px;color:var(--ink);padding:10px 12px;outline:none}.text-input:focus{border-color:rgba(79,214,192,.5)}.btn{border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);padding:9px 13px;font-weight:600;cursor:pointer}.btn:hover{background:var(--card-hover)}.btn-primary{background:var(--teal-500);border-color:var(--teal-500);color:var(--navy-950)}.btn-danger{color:#ffb4b4}.backup-bar{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:0 0 18px;padding:13px 15px;border:1px solid rgba(211,167,92,.22);border-radius:10px;background:rgba(211,167,92,.045)}.backup-copy{display:flex;flex-direction:column;gap:3px}.backup-copy strong{font:600 13px Inter;color:var(--brass)}.backup-copy span{font-size:11px;color:var(--ink-faint)}.backup-actions{display:flex;gap:8px;flex-wrap:wrap}.backup-input{display:none}.items-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px}.item-row{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:11px 14px;transition:.2s}.item-row:hover{background:var(--card-hover)}.item-row.done{border-color:rgba(47,182,163,.28);background:rgba(47,182,163,.05)}.item-name{flex:1;font-size:14px;line-height:1.35}.item-row.done .item-name{color:var(--ink-faint);text-decoration:line-through;text-decoration-color:var(--teal-500)}.price-field{display:flex;align-items:center;gap:4px;background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:6px;padding:5px 8px}.price-field span{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--ink-faint)}.price-field input{width:64px;background:none;border:none;outline:none;color:var(--brass);font-family:'JetBrains Mono',monospace;font-size:12.5px}.icon-btn{border:none;background:none;color:var(--ink-faint);cursor:pointer;font-size:18px;line-height:1;padding:2px}.icon-btn:hover{color:#ffb4b4}.peg{appearance:none;border:none;background:none;cursor:pointer;width:26px;height:26px;padding:0;flex-shrink:0}.peg__body{width:22px;height:22px;border-radius:6px;border:1.5px solid var(--ink-faint);display:flex;align-items:center;justify-content:center;transition:.2s;background:rgba(255,255,255,.02)}.peg__check{width:12px;height:8px;fill:none;stroke:var(--navy-950);stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round;opacity:0;transform:scale(.6);transition:.18s}.peg--on .peg__body{background:var(--teal-400);border-color:var(--teal-400)}.peg--on .peg__check{opacity:1;transform:scale(1)}.empty{padding:36px;border:1px dashed var(--line);border-radius:12px;text-align:center;color:var(--ink-faint)}.footer-note{margin-top:34px;padding-top:18px;border-top:1px solid var(--line);font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ink-faint)}@media(max-width:760px){.layout{flex-direction:column}.rooms-rail{width:100%;border-right:none;border-bottom:1px solid var(--line);display:flex;overflow-x:auto;padding:14px 16px;gap:4px}.room-tab{white-space:nowrap;min-width:max-content}.add-room{min-width:280px;margin:0 0 0 12px;padding:0 0 0 12px;border-top:none;border-left:1px solid var(--line)}.main{padding:22px 18px 50px}.items-grid{grid-template-columns:1fr}.backup-bar{align-items:flex-start;flex-direction:column}.backup-actions{width:100%}.backup-actions .btn{flex:1}}
       `}</style>
 
       <header className="header">
         <div className="header__line" />
         <p className="eyebrow">Lista de Enxoval</p>
-        <h1>Meu <em>enxoval</em>, item por item</h1>
+        <h1>Meu <em>enxoval</em> de casa nova, item por item</h1>
         <div className={`save-indicator ${savedPulse ? "show" : ""}`}>
           <span className="dot" /> salvo
         </div>
@@ -350,6 +468,25 @@ export default function EnxovalApp() {
             {rooms.length > 1 && <button className="btn btn-danger" type="button" onClick={removeRoom}>Excluir cômodo</button>}
             <button className="btn" type="button" onClick={resetAll}>Restaurar lista inicial</button>
           </div>
+
+          <section className="backup-bar" aria-label="Backup da lista">
+            <div className="backup-copy">
+              <strong>Fotografia da sua lista</strong>
+              <span>Baixe, compartilhe ou restaure um backup completo deste momento.</span>
+            </div>
+            <div className="backup-actions">
+              <button className="btn" type="button" onClick={downloadBackup}>Baixar backup</button>
+              <button className="btn" type="button" onClick={shareBackup}>Compartilhar</button>
+              <button className="btn" type="button" onClick={() => backupInputRef.current?.click()}>Restaurar backup</button>
+              <input
+                ref={backupInputRef}
+                className="backup-input"
+                type="file"
+                accept="application/json,.json"
+                onChange={importBackup}
+              />
+            </div>
+          </section>
 
           {activeRoom.items.length ? (
             <div className="items-grid">

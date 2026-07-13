@@ -1,0 +1,10 @@
+{
+  "name": "enxoval",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix enxoval-app run dev",
+    "build": "npm --prefix enxoval-app run build",
+    "lint": "npm --prefix enxoval-app run lint",
+    "preview": "npm --prefix enxoval-app run preview"
+  }
+}

@@ -313,6 +313,12 @@ export default function EnxovalApp() {
 
   const shareBackup = async () => {
     const file = createBackupFile();
+    const downloadAsFallback = () => {
+      downloadFile(file);
+      window.alert(
+        "O navegador não permitiu o compartilhamento. O backup foi baixado para você anexá-lo ao seu e-mail."
+      );
+    };
     const shareData = {
       title: "Backup do Meu Enxoval",
       text: "Guarde este arquivo para restaurar sua lista de enxoval quando precisar.",
@@ -323,15 +329,13 @@ export default function EnxovalApp() {
       try {
         await navigator.share(shareData);
       } catch (error) {
-        if (error.name !== "AbortError") {
-          console.error("Não foi possível compartilhar o backup.", error);
-        }
+        if (error.name === "AbortError") return;
+        downloadAsFallback();
       }
       return;
     }
 
-    downloadFile(file);
-    window.alert("O arquivo foi baixado. Anexe-o ao seu e-mail para guardar uma cópia.");
+    downloadAsFallback();
   };
 
   const isValidBackup = (backup) => {
